@@ -1,217 +1,257 @@
-import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'package:customer/pages/login_page.dart';
-import 'package:customer/util/bottom_navigation_bar_page.dart';
+
+import 'package:customer/util/api.dart';
+import 'package:customer/util/dialog_box.dart';
 import 'package:customer/util/ipfile.dart';
+import 'package:customer/util/responsive.dart';
+import 'package:customer/util/session.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 class RegisterPage extends StatefulWidget {
+  const RegisterPage({super.key});
+
   @override
-  _RegisterPageState createState() => _RegisterPageState();
+  State<RegisterPage> createState() => _RegisterPageState();
 }
 
 class _RegisterPageState extends State<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _addressController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
-    final TextEditingController _nameController = TextEditingController();
-      final TextEditingController _confirmPasswordController =
-      TextEditingController();
+  final _nameController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  bool _loading = false;
+  bool _showPassword = false;
 
+  @override
+  void dispose() {
+    for (final c in [
+      _nameController,
+      _emailController,
+      _phoneController,
+      _addressController,
+      _passwordController,
+      _confirmPasswordController,
+    ]) {
+      c.dispose();
+    }
+    super.dispose();
+  }
 
-  void _register() async {
-  Map<String, dynamic> registerData = {
-    "name": _nameController.text,
-    "email": _emailController.text,
-    "address": _addressController.text,
-    "phone": _phoneController.text,
-    "password": _passwordController.text
-  };
+  Future<void> _register() async {
+    if (_loading || !_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
 
-  try {
-    final response = await http.post(
-      Uri.parse(registerUrl),
-      headers: <String, String>{
-        'Content-Type': 'application/json; charset=UTF-8',
-      },
-      body: jsonEncode(registerData),
-    );
+    try {
+      final response = await postJson(registerUrl, {
+        'name': _nameController.text.trim(),
+        'email': _emailController.text.trim(),
+        'address': _addressController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'password': _passwordController.text,
+      });
+      if (!mounted) return;
 
-    if (response.statusCode == 200) {
-      print("**************Register Successful*********************");
-      print(response.body);
-var responseData = json.decode(response.body);
-
-        if (responseData.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Invalid Credentials"),
-              backgroundColor: Colors.red,
-            ),
-          );
+      if (response.statusCode == 200) {
+        final user = response.body.isEmpty ? null : json.decode(response.body);
+        if (user is Map && user['id'] is int) {
+          showMessage(context, 'Welcome, ${_nameController.text.trim()}!');
+          await startSession(context, user['id']);
           return;
         }
-
-        dynamic user = responseData;
-        int exUserId = user['id'];
-        SharedPreferences prefs = await SharedPreferences.getInstance();
-        await prefs.setInt('loggedUserID', exUserId); // Corrected setInt method
-
-        print(exUserId);
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BottomNavigationBarPage(userId: exUserId),
-          ),
-        );
-            } else if (response.statusCode == 409) {
-      print("**************Email Already Exists*********************");
-          ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Email Already Exists"),
-            backgroundColor: Colors.redAccent,
-          ),
-        );    } else {
-      print("**************Registration Failed*********************");
-      print("Status Code: ${response.statusCode}");
-      print("Response Body: ${response.body}");
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Invalid Credentials"),
-            backgroundColor: Colors.red,
-          ),
-        );
+        showMessage(context, 'Registration failed. Please try again.',
+            error: true);
+      } else if (response.statusCode == 409) {
+        showMessage(context, 'An account with this email already exists',
+            error: true);
+      } else {
+        showMessage(context, 'Registration failed (${response.statusCode})',
+            error: true);
+      }
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-  } catch (e) {
-    print("**************Error During Registration*********************");
-    print(e.toString());
-    // Handle exceptions, e.g., network errors
   }
-}
+
+  Widget _field({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? Function(String?)? validator,
+    TextInputType? keyboardType,
+    bool password = false,
+    int maxLines = 1,
+    Iterable<String>? autofillHints,
+  }) {
+    return TextFormField(
+      controller: controller,
+      keyboardType: keyboardType,
+      obscureText: password && !_showPassword,
+      maxLines: password ? 1 : maxLines,
+      minLines: 1,
+      autofillHints: autofillHints,
+      textInputAction:
+          maxLines > 1 ? TextInputAction.newline : TextInputAction.next,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: Icon(icon),
+        suffixIcon: password
+            ? IconButton(
+                tooltip: _showPassword ? 'Hide password' : 'Show password',
+                icon: Icon(
+                    _showPassword ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => _showPassword = !_showPassword),
+              )
+            : null,
+      ),
+      validator: validator,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    final nameField = _field(
+      controller: _nameController,
+      label: 'Name',
+      icon: Icons.person_outline,
+      autofillHints: const [AutofillHints.name],
+      validator: (v) => validateRequired(v, 'name'),
+    );
+    final emailField = _field(
+      controller: _emailController,
+      label: 'Email',
+      icon: Icons.email_outlined,
+      keyboardType: TextInputType.emailAddress,
+      autofillHints: const [AutofillHints.email],
+      validator: validateEmail,
+    );
+    final phoneField = _field(
+      controller: _phoneController,
+      label: 'Phone number',
+      icon: Icons.phone_outlined,
+      keyboardType: TextInputType.phone,
+      autofillHints: const [AutofillHints.telephoneNumber],
+      validator: validatePhone,
+    );
+    final passwordField = _field(
+      controller: _passwordController,
+      label: 'Password',
+      icon: Icons.lock_outline,
+      password: true,
+      autofillHints: const [AutofillHints.newPassword],
+      validator: (v) {
+        if (v == null || v.isEmpty) return 'Please enter a password';
+        if (v.length < 4) return 'Use at least 4 characters';
+        return null;
+      },
+    );
+    final confirmField = _field(
+      controller: _confirmPasswordController,
+      label: 'Confirm password',
+      icon: Icons.lock_outline,
+      password: true,
+      validator: (v) =>
+          v != _passwordController.text ? 'Passwords do not match' : null,
+    );
+    final addressField = _field(
+      controller: _addressController,
+      label: 'Address',
+      icon: Icons.home_outlined,
+      keyboardType: TextInputType.streetAddress,
+      maxLines: 3,
+      autofillHints: const [AutofillHints.fullStreetAddress],
+      validator: (v) => validateRequired(v, 'address'),
+    );
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Register'),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      appBar: AppBar(title: const Text('Register')),
+      body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Register',
-                    style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-                  ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _nameController,
-                    decoration: InputDecoration(
-                      labelText: 'Name',
-                      border: OutlineInputBorder(),
+            padding: const EdgeInsets.all(16.0),
+            child: MaxWidth(
+              maxWidth: 720,
+              child: Card(
+                elevation: 4,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16)),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: _formKey,
+                    autovalidateMode: AutovalidateMode.onUserInteraction,
+                    child: AutofillGroup(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          // Two columns of fields when there's room.
+                          final twoCols = constraints.maxWidth >= 560;
+                          Widget pair(Widget a, Widget b) => twoCols
+                              ? Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(child: a),
+                                    const SizedBox(width: 16),
+                                    Expanded(child: b),
+                                  ],
+                                )
+                              : Column(children: [
+                                  a,
+                                  const SizedBox(height: 16),
+                                  b,
+                                ]);
+
+                          return Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                'Create your account',
+                                style: TextStyle(
+                                    fontSize: 24, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 20),
+                              pair(nameField, emailField),
+                              const SizedBox(height: 16),
+                              pair(phoneField, addressField),
+                              const SizedBox(height: 16),
+                              pair(passwordField, confirmField),
+                              const SizedBox(height: 24),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: FilledButton(
+                                  onPressed: _loading ? null : _register,
+                                  style: FilledButton.styleFrom(
+                                      backgroundColor: Colors.red[700]),
+                                  child: _loading
+                                      ? const SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2.5,
+                                              color: Colors.white),
+                                        )
+                                      : const Text('Register',
+                                          style: TextStyle(fontSize: 16)),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              TextButton(
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text(
+                                    'Already have an account? Login'),
+                              ),
+                            ],
+                          );
+                        },
+                      ),
                     ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your name';
-                      }
-                      return null;
-                    },
                   ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _emailController,
-                    decoration: InputDecoration(
-                      labelText: 'Email',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your email';
-                      }
-                      return null;
-                    },
-                  ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _phoneController,
-                    decoration: InputDecoration(
-                      labelText: 'Phone number',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your phone number';
-                      }
-                      return null;
-                    },
-                  ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _addressController,
-                    decoration: InputDecoration(
-                      labelText: 'Address',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your Address';
-                      }
-                      return null;
-                    },
-                  ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      border: OutlineInputBorder(),
-                    ),
-                    obscureText: true,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter your password';
-                      }
-                      return null;
-                    },
-                  ),
-                  SizedBox(height: 20),
-                  TextFormField(
-                    controller: _confirmPasswordController,
-                    decoration: InputDecoration(
-                      labelText: 'Confirm Password',
-                      border: OutlineInputBorder(),
-                    ),
-                    obscureText: true,
-                    validator: (value) {
-                      if (value != _passwordController.text) {
-                        return 'Passwords do not match';
-                      }
-                      return null;
-                    },
-                  ),
-                  SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _register,
-                    child: Text('Register'),
-                  ),
-                  SizedBox(height: 10),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(context, '/login');
-                    },
-                    child: Text('Already have an account? Login'),
-                  ),
-                ],
+                ),
               ),
             ),
           ),

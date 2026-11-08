@@ -1,299 +1,325 @@
-import 'dart:convert';
-import 'package:customer/util/model.dart';
+import 'package:customer/util/api.dart';
+import 'package:customer/util/dialog_box.dart';
+import 'package:customer/util/format.dart';
 import 'package:customer/util/ipfile.dart';
+import 'package:customer/util/responsive.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter/services.dart';
+
+const double discountRate = 0.05;
+const int deliveryDays = 3;
 
 class ItemInfoPage extends StatefulWidget {
-  final Map<String, dynamic> inventory;
+  final Json inventory;
   final int userId;
 
-  ItemInfoPage({Key? key, required this.inventory, required this.userId})
-      : super(key: key);
+  const ItemInfoPage({super.key, required this.inventory, required this.userId});
 
   @override
   State<ItemInfoPage> createState() => _ItemInfoPageState();
 }
 
 class _ItemInfoPageState extends State<ItemInfoPage> {
-  double _OrderWeight = 0;
-  double _order_amount = 0;
-  double _discount_applied = 0;
-  double _final_amount = 0;
-  DateTime ordered_date = DateTime.now();
+  final _weightController = TextEditingController(text: '0');
+  double _orderWeight = 0;
+  bool _placing = false;
 
-  void oneDecrement() {
+  double get _available => toDouble(widget.inventory['remaining_weight']);
+  double get _rate => toDouble(widget.inventory['final_rate_per_kg']);
+  double get _orderAmount => _orderWeight * _rate;
+  double get _discount => _orderAmount * discountRate;
+  double get _finalAmount => _orderAmount - _discount;
+  bool get _tooMuch => _orderWeight > _available;
+  bool get _canOrder => _orderWeight > 0 && !_tooMuch && !_placing;
+
+  @override
+  void dispose() {
+    _weightController.dispose();
+    super.dispose();
+  }
+
+  void _setWeight(double value, {bool updateField = true}) {
     setState(() {
-      if (_OrderWeight > 0) {
-        _OrderWeight--;
-        _updateOrderAmount();
+      _orderWeight = value < 0 ? 0 : value;
+      if (updateField) {
+        final v = _orderWeight;
+        _weightController.text =
+            v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
       }
     });
   }
 
-  void oneIncrement() {
-    setState(() {
-      if (_OrderWeight < (widget.inventory['remaining_weight'] as double)) {
-        _OrderWeight++;
-        _updateOrderAmount();
-      }
-    });
-  }
+  void _decrement() => _setWeight(_orderWeight - 1 < 0 ? 0 : _orderWeight - 1);
 
-  void _updateOrderAmount() {
-    setState(() {
-      _order_amount =
-          _OrderWeight * (widget.inventory['final_rate_per_kg'] as double);
-      _discount_applied = _order_amount * 0.05;
-      _final_amount = _order_amount - _discount_applied;
-    });
-  }
+  void _increment() =>
+      _setWeight(_orderWeight + 1 > _available ? _available : _orderWeight + 1);
 
-  void _createOrd() async {
-    Map<String, dynamic> newOrd = {
-      'inventory_id': widget.inventory['inven_id'].toString(),
-      'farmer_id': widget.inventory['farmer_id'].toString(),
-      'buyer_id': widget.userId.toString(), // Replace with actual buyer ID
-      'item_id': widget.inventory['item_id'].toString(),
-      'weight': _OrderWeight.toString(),
-      'ordered_date': ordered_date.toIso8601String(),
-      'est_delivery_date':
-          ordered_date.add(Duration(days: 3)).toIso8601String(),
-      'order_amount': _order_amount.toString(),
-      'discount_applied': _discount_applied.toString(),
-      'amount_pending': _final_amount.toString(),
-      'final_amount': _final_amount.toString(),
+  Future<void> _placeOrder() async {
+    if (!_canOrder) return;
+    final ok = await confirm(
+      context,
+      'Order ${formatKg(_orderWeight)} of ${widget.inventory['item_name']} '
+      'for ${formatMoney(_finalAmount)}?',
+      confirmLabel: 'Place order',
+    );
+    if (!ok || !mounted) return;
+
+    setState(() => _placing = true);
+    final now = DateTime.now();
+    final order = {
+      'inventory_id': widget.inventory['inven_id'],
+      'farmer_id': widget.inventory['farmer_id'],
+      'buyer_id': widget.userId,
+      'item_id': widget.inventory['item_id'],
+      'weight': _orderWeight,
+      'ordered_date': apiDate(now),
+      'est_delivery_date': apiDate(now.add(const Duration(days: deliveryDays))),
+      'order_amount': _orderAmount,
+      'discount_applied': _discount,
+      'amount_pending': _finalAmount,
+      'final_amount': _finalAmount,
       'status': 'order placed',
     };
 
-    print(newOrd);
-
     try {
-      final response = await http.post(
-        Uri.parse(postOrderUrl),
-        headers: <String, String>{
-          'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: jsonEncode(newOrd),
-      );
-
-      if (response.statusCode == 200) {
-        print('Order Added');
-      } else {
-        throw Exception('Failed to add Order');
+      // Only reduce stock once the order has really been created.
+      final created = await postJson(postOrderUrl, order);
+      if (created.statusCode != 200) {
+        throw ApiException(
+            'Could not place the order (${created.statusCode}).');
       }
-    } catch (error) {
-      print('Error: $error');
+
+      String message = 'Order placed! Delivery in about $deliveryDays days.';
+      try {
+        final updated = await putJson(
+          '$updateInventoryUrl/${widget.inventory['inven_id']}',
+          {'remaining_weight': _available - _orderWeight},
+        );
+        if (updated.statusCode != 200) {
+          message = 'Order placed, but the stock count was not updated.';
+        }
+      } on ApiException {
+        message = 'Order placed, but the stock count was not updated.';
+      }
+
+      if (!mounted) return;
+      showMessage(context, message);
+      Navigator.pop(context, true);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _placing = false);
+      showMessage(context, e.message, error: true);
     }
   }
 
-  void _updateInventory() async {
-    double remainingWeight =
-        (widget.inventory['remaining_weight'] as double) - _OrderWeight;
-    Map<String, dynamic> updatedInventory = {
- 
-      'remaining_weight': remainingWeight.toString(),
-    };
+  Widget _image(double height) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(15),
+      child: Image.network(
+        getImageUrl(widget.inventory['name']),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: height,
+        errorBuilder: (context, error, stackTrace) => Container(
+          height: height,
+          color: Colors.grey[200],
+          child: const Icon(Icons.image_not_supported,
+              size: 64, color: Colors.grey),
+        ),
+        loadingBuilder: (context, child, progress) => progress == null
+            ? child
+            : SizedBox(
+                height: height,
+                child: const Center(child: CircularProgressIndicator())),
+      ),
+    );
+  }
 
-    print(updatedInventory);
+  Widget _priceLine(String label, String value, {bool bold = false}) {
+    final style = TextStyle(
+        fontSize: bold ? 18 : 15,
+        fontWeight: bold ? FontWeight.bold : FontWeight.normal);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: style)),
+          Text(value, style: style),
+        ],
+      ),
+    );
+  }
 
-    try {
-      final response = await http.put(
-        Uri.parse('$updateInventoryUrl/${widget.inventory['inven_id']}'),
-        headers: <String, String>{
-          'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: jsonEncode(updatedInventory),
-      );
-
-      if (response.statusCode == 200) {
-        print('Inventory Updated');
-      } else {
-        throw Exception('Failed to update inventory      $updateInventoryUrl/${widget.inventory['inven_id']}');
-      }
-    } catch (error) {
-      print('Error: $error');
-    }
+  Widget _details() {
+    final inv = widget.inventory;
+    final soldOut = _available <= 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                inv['item_name'] ?? 'Unknown',
+                style:
+                    const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              ),
+            ),
+            Text(
+              '${formatMoney(_rate)}/kg',
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.red[800]),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        InfoRow(
+            icon: Icons.person,
+            label: 'Farmer',
+            value: inv['farmer_name'] ?? 'Unknown',
+            color: Colors.amber[800]),
+        InfoRow(
+            icon: Icons.description,
+            label: 'About',
+            value: inv['item_description'] ?? 'No description',
+            color: Colors.amber[800]),
+        InfoRow(
+            icon: Icons.inventory,
+            label: 'In stock',
+            value: soldOut ? 'Sold out' : formatKg(_available),
+            color: Colors.amber[800]),
+        const Divider(height: 28),
+        if (soldOut)
+          const StatusMessage(
+            icon: Icons.remove_shopping_cart,
+            message: 'This item is sold out.',
+          )
+        else ...[
+          const Text('Quantity (kg)',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              IconButton.filledTonal(
+                tooltip: 'Remove 1 kg',
+                onPressed: _orderWeight > 0 && !_placing ? _decrement : null,
+                icon: const Icon(Icons.remove),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: TextField(
+                  controller: _weightController,
+                  enabled: !_placing,
+                  textAlign: TextAlign.center,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                  ],
+                  decoration: InputDecoration(
+                    isDense: true,
+                    suffixText: 'kg',
+                    errorText: _tooMuch
+                        ? 'Only ${formatKg(_available)} available'
+                        : null,
+                  ),
+                  onChanged: (v) =>
+                      _setWeight(double.tryParse(v) ?? 0, updateField: false),
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filledTonal(
+                tooltip: 'Add 1 kg',
+                onPressed:
+                    _orderWeight < _available && !_placing ? _increment : null,
+                icon: const Icon(Icons.add),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _priceLine('Subtotal', formatMoney(_orderAmount)),
+          _priceLine('Discount (${(discountRate * 100).round()}%)',
+              '- ${formatMoney(_discount)}'),
+          const Divider(),
+          _priceLine('Total', formatMoney(_finalAmount), bold: true),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: FilledButton.icon(
+              onPressed: _canOrder ? _placeOrder : null,
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.amber[700],
+                foregroundColor: Colors.black,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: _placing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.5),
+                    )
+                  : const Icon(Icons.shopping_cart_checkout),
+              label: Text(
+                _orderWeight > 0
+                    ? 'Place Order (${formatKg(_orderWeight)})'
+                    : 'Choose a quantity',
+                style: const TextStyle(fontSize: 17),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('ITEM INFO'),
-        backgroundColor: Colors.red,
-        shadowColor: Colors.black,
-        elevation: 10,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () {
-            Navigator.pop(context);
-          },
-        ),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(height: 16),
-              Card(
-                elevation: 5,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
+      appBar: AppBar(title: const Text('ITEM INFO'), elevation: 10),
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= wideBreakpoint;
+            final content = wide
+                // Side by side on wide screens.
+                ? Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(15),
-                        child: Image.network(
-                          getImageUrl(widget.inventory['name']),
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: 200,
-                        ),
-                      ),
-                      SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Icon(Icons.label, color: Colors.amber,size: 15,),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              widget.inventory['item_name'] ?? 'Unknown',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                            Icon(Icons.label, color: Colors.amber,size: 15,),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              '₹ ${widget.inventory['final_rate_per_kg']}',
-                              style: TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Icon(Icons.person, color: Colors.amber,size: 15,),
-                          SizedBox(width: 10),
-                          Text(
-                            widget.inventory['farmer_name'] ?? 'Unknown',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-      
-                      SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Icon(Icons.description , color: Colors.amber,size: 15,),
-                          SizedBox(width: 10),
-                          Text(
-                            widget.inventory['item_description'] ?? 'Unknown',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.inventory,
-                            color: Colors.amber,size: 15,
-                          ),
-                          SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              'In inventory: ${widget.inventory['remaining_weight']}kg',
-                              style: TextStyle(fontSize: 15),
-                            ),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          ElevatedButton(
-                            onPressed: oneDecrement,
-                            child: Icon(Icons.remove_circle_outline,
-                                color: Colors.red),
-                          ),
-                          SizedBox(width: 10),
-                          ElevatedButton(
-                            onPressed: oneIncrement,
-                            child: Icon(Icons.add_circle_outline,
-                                color: Colors.green),
-                          ),
-                        ],
-                      ),
-                      SizedBox(height: 10),
-                      GestureDetector(
-                        onTap: () {
-                          if (_OrderWeight != 0) {
-                            _createOrd();
-                            _updateInventory();
-                            Navigator.pop(context);
-                          }
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: Colors.amber,
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
-                          height: 50,
-                          width: double.infinity,
-                          child: Center(
-                            child: Text(
-                              'Place Order ($_OrderWeight kg)',
-                              style: const TextStyle(
-                                fontSize: 20,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: 7),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.attach_money,
-                            color: Colors.amber,
-                            size: 20,
-                          ),
-                          SizedBox(width: 10),
-                          Text(
-                            '\₹ $_order_amount',
-                            style: TextStyle(fontSize: 20),
-                          ),
-                        ],
-                      ),
+                      Expanded(flex: 5, child: _image(380)),
+                      const SizedBox(width: 24),
+                      Expanded(flex: 6, child: _details()),
                     ],
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _image((constraints.maxHeight * 0.32).clamp(180, 320)),
+                      const SizedBox(height: 16),
+                      _details(),
+                    ],
+                  );
+
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: MaxWidth(
+                maxWidth: 1000,
+                child: Card(
+                  elevation: 5,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: content,
                   ),
                 ),
               ),
-              SizedBox(height:200),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

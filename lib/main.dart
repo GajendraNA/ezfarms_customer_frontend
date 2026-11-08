@@ -1,46 +1,52 @@
 import 'package:customer/util/bottom_navigation_bar_page.dart';
 import 'package:customer/pages/login_page.dart';
+import 'package:customer/util/ipfile.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-
-void main() {
-  runApp(MyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await loadServerAddress();
+  runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(theme: ThemeData(
-    scaffoldBackgroundColor: Colors.red[50], 
-    
-    appBarTheme: AppBarTheme(
-      color: Colors.red[700], 
-      elevation: 4,
-      titleTextStyle: TextStyle(
-        color: Colors.black, 
-        fontSize: 20, 
-        fontWeight: FontWeight.bold,
-      ), 
-      iconTheme: IconThemeData(
-        color: Colors.black, 
+    return MaterialApp(
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
+        scaffoldBackgroundColor: Colors.red[50],
+        appBarTheme: AppBarTheme(
+          backgroundColor: Colors.red,
+          shadowColor: Colors.black,
+          elevation: 4,
+          titleTextStyle: const TextStyle(
+            color: Colors.black,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+          iconTheme: const IconThemeData(color: Colors.black),
+          actionsIconTheme: const IconThemeData(color: Colors.black),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        ),
       ),
-    ),),
       debugShowCheckedModeBanner: false,
-      title: 'Flutter Demo',
-      initialRoute: '/',
-      routes: {
-        '/': (context) => AuthCheck(),
-        '/login': (context) => LoginPage(),
-        '/home': (context) => BottomNavigationBarPage(userId: 0), // Placeholder userId, will be set later
-      },
+      title: 'Customer',
+      home: const AuthCheck(),
     );
   }
 }
 
 class AuthCheck extends StatefulWidget {
+  const AuthCheck({super.key});
+
   @override
-  _AuthCheckState createState() => _AuthCheckState();
+  State<AuthCheck> createState() => _AuthCheckState();
 }
 
 class _AuthCheckState extends State<AuthCheck> {
@@ -54,8 +60,14 @@ class _AuthCheckState extends State<AuthCheck> {
   }
 
   Future<void> _checkLoginStatus() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    int? userId = prefs.getInt('loggedUserID');
+    int? userId;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      userId = prefs.getInt('loggedUserID');
+    } catch (_) {
+      // Treat unreadable preferences as logged out.
+    }
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
       _userId = userId;
@@ -65,15 +77,11 @@ class _AuthCheckState extends State<AuthCheck> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    } else if (_userId != null) {
-      return BottomNavigationBarPage(userId: _userId!); // Pass the userId if logged in
-    } else {
-      return LoginPage();
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    if (_userId != null) {
+      return BottomNavigationBarPage(userId: _userId!);
+    }
+    return const LoginPage();
   }
 }

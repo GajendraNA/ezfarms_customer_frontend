@@ -1,12 +1,11 @@
-import 'package:customer/pages/farmer_list_page.dart';
 import 'package:customer/pages/home_page.dart';
-import 'package:customer/pages/login_page.dart';
 import 'package:customer/pages/orders_page.dart';
 import 'package:customer/pages/payment_page.dart';
+import 'package:customer/util/responsive.dart';
 import 'package:flutter/material.dart';
-import 'package:font_awesome_flutter/font_awesome_flutter.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+/// The main app shell: a bottom bar on phones and a side rail on wider
+/// screens (tablets, landscape, desktop, web).
 class BottomNavigationBarPage extends StatefulWidget {
   final int userId;
 
@@ -17,58 +16,86 @@ class BottomNavigationBarPage extends StatefulWidget {
       _BottomNavigationBarPageState();
 }
 
+class _Destination {
+  final IconData icon;
+  final IconData selectedIcon;
+  final String label;
+  const _Destination(this.icon, this.selectedIcon, this.label);
+}
+
+const _destinations = [
+  _Destination(Icons.home_outlined, Icons.home, 'Home'),
+  _Destination(Icons.history, Icons.history, 'My Orders'),
+  _Destination(Icons.payment_outlined, Icons.payment, 'Payments'),
+];
+
 class _BottomNavigationBarPageState extends State<BottomNavigationBarPage> {
   int _selectedIndex = 0;
 
-  void _navigateBottomBar(int index) {
-    setState(() {
-      _selectedIndex = index;
-    });
+  Widget _page(int index) {
+    // Pages are rebuilt on each switch so Orders and Payments always show
+    // fresh data (e.g. right after placing an order).
+    switch (index) {
+      case 1:
+        return OrdersPage(userId: widget.userId);
+      case 2:
+        return PaymentPage(userId: widget.userId);
+      default:
+        return HomePage(userId: widget.userId);
+    }
   }
 
-  late final List<Widget> _pages;
-
-  @override
-  void initState() {
-    super.initState();
-    _pages = [
-      HomePage(userId: widget.userId),
-      OrdersPage(
-        userId: widget.userId,
-      ),
-      PaymentPage(userId: widget.userId),
-    ];
-  }
+  void _select(int index) => setState(() => _selectedIndex = index);
 
   @override
   Widget build(BuildContext context) {
+    final page = KeyedSubtree(
+      key: ValueKey(_selectedIndex),
+      child: _page(_selectedIndex),
+    );
+
+    if (isWide(context)) {
+      return Scaffold(
+        body: Row(
+          children: [
+            NavigationRail(
+              backgroundColor: Colors.red[50],
+              selectedIndex: _selectedIndex,
+              onDestinationSelected: _select,
+              labelType: NavigationRailLabelType.all,
+              indicatorColor: Colors.red[200],
+              selectedIconTheme: IconThemeData(color: Colors.red[800]),
+              unselectedIconTheme: IconThemeData(color: Colors.red[400]),
+              destinations: [
+                for (final d in _destinations)
+                  NavigationRailDestination(
+                    icon: Icon(d.icon),
+                    selectedIcon: Icon(d.selectedIcon),
+                    label: Text(d.label),
+                  ),
+              ],
+            ),
+            const VerticalDivider(width: 1),
+            Expanded(child: page),
+          ],
+        ),
+      );
+    }
+
     return Scaffold(
-      body: _pages[_selectedIndex],
-      bottomNavigationBar: BottomNavigationBar(
-         backgroundColor: Colors.red[50], 
-          selectedItemColor: Colors.red[800],
-          unselectedItemColor: Colors.red[400], 
-          currentIndex: _selectedIndex,
-          onTap: _navigateBottomBar,
-          elevation: 12, 
-          selectedFontSize: 14, 
-          unselectedFontSize: 12,
-          type: BottomNavigationBarType.fixed,
-          showUnselectedLabels:
-              true,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: FaIcon(Icons.history),
-            label: 'Previous Orders',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.payment),
-            label: 'Payments',
-          ),
+      body: page,
+      bottomNavigationBar: NavigationBar(
+        backgroundColor: Colors.red[50],
+        indicatorColor: Colors.red[200],
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: _select,
+        destinations: [
+          for (final d in _destinations)
+            NavigationDestination(
+              icon: Icon(d.icon, color: Colors.red[400]),
+              selectedIcon: Icon(d.selectedIcon, color: Colors.red[800]),
+              label: d.label,
+            ),
         ],
       ),
     );

@@ -1,185 +1,249 @@
 import 'dart:convert';
+
 import 'package:customer/pages/register_page.dart';
-import 'package:customer/util/bottom_navigation_bar_page.dart';
+import 'package:customer/util/api.dart';
+import 'package:customer/util/dialog_box.dart';
 import 'package:customer/util/ipfile.dart';
+import 'package:customer/util/responsive.dart';
+import 'package:customer/util/session.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
   @override
-  _LoginPageState createState() => _LoginPageState();
+  State<LoginPage> createState() => _LoginPageState();
 }
 
 class _LoginPageState extends State<LoginPage> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _emailController = TextEditingController();
-  final TextEditingController _passwordController = TextEditingController();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _loading = false;
+  bool _showPassword = false;
 
-  void _checkLogin() async {
-    Map<String, dynamic> checkLogin = {
-      "email": _emailController.text,
-      "password": _passwordController.text
-    };
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkLogin() async {
+    if (_loading || !_formKey.currentState!.validate()) return;
+    FocusScope.of(context).unfocus();
+    setState(() => _loading = true);
 
     try {
-      final response = await http.post(
-        Uri.parse(loginUrl),
-        headers: <String, String>{
-          'Content-Type': 'application/json; charset=UTF-8',
-        },
-        body: jsonEncode(checkLogin),
-      );
+      final response = await postJson(loginUrl, {
+        'email': _emailController.text.trim(),
+        'password': _passwordController.text,
+      });
+      if (!mounted) return;
 
-      if (response.statusCode == 200) {
-        print('******************Login********************');
-        print(response.body);
-
-        var responseData = json.decode(response.body);
-
-        if (responseData.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Invalid Credentials"),
-              backgroundColor: Colors.red,
-            ),
-          );
-          return;
-        }
-
-        dynamic user = responseData;
-        int exUserId = user['id'];
-        SharedPreferences prefs = await SharedPreferences.getInstance();
-        await prefs.setInt('loggedUserID', exUserId); // Corrected setInt method
-
-        print(exUserId);
-
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (context) => BottomNavigationBarPage(userId: exUserId),
-          ),
-        );
-      } 
-      else if(response.statusCode== 401){
- print("**************Email or password doesnt match*********************");
-          ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Email or password doesnt match"),
-            backgroundColor: Colors.redAccent,
-          ),
-          );
+      switch (response.statusCode) {
+        case 200:
+          final user = response.body.isEmpty ? null : json.decode(response.body);
+          if (user is Map && user['id'] is int) {
+            await startSession(context, user['id']);
+            return;
+          }
+          showMessage(context, 'Invalid credentials', error: true);
+        case 401:
+          showMessage(context, "Email and password don't match", error: true);
+        case 400:
+          showMessage(context, 'No account found for this email', error: true);
+        default:
+          showMessage(context, 'Login failed (${response.statusCode})',
+              error: true);
       }
-      else if(response.statusCode== 400){
- print("**************Email not found*********************");
-          ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Email not found"),
-            backgroundColor: Colors.redAccent,
-          ),
-          );
-      }
-      
-      
-      else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Invalid Credentials"),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } catch (error) {
-      print('Error: $error');
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   void _register() {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => RegisterPage(),
+      MaterialPageRoute(builder: (context) => const RegisterPage()),
+    );
+  }
+
+  Future<void> _editServer() async {
+    final ip = TextEditingController(text: ipAddress);
+    final portCtl = TextEditingController(text: port);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Server address'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ip,
+              decoration: const InputDecoration(labelText: 'IP address'),
+              keyboardType: TextInputType.url,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: portCtl,
+              decoration: const InputDecoration(labelText: 'Port'),
+              keyboardType: TextInputType.number,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              ip.text = defaultIpAddress;
+              portCtl.text = defaultPort;
+            },
+            child: const Text('Reset'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
+    if (saved == true && ip.text.trim().isNotEmpty) {
+      await saveServerAddress(ip.text,
+          portCtl.text.trim().isEmpty ? defaultPort : portCtl.text);
+      if (mounted) showMessage(context, 'Server set to $ipAddress:$port');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          child: Card(
-            elevation: 8.0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10.0),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(
-                      'Welcome Back',
-                      style: TextStyle(
-                        fontSize: 24.0,
-                        fontWeight: FontWeight.bold,
-                      ),
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16),
+                child: MaxWidth(
+                  maxWidth: 420,
+                  child: Card(
+                    elevation: 8.0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16.0),
                     ),
-                    SizedBox(height: 16.0),
-                    TextFormField(
-                      controller: _emailController,
-                      decoration: InputDecoration(
-                        labelText: 'Email',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10.0),
-                        ),
-                      ),
-                    ),
-                    SizedBox(height: 16.0),
-                    TextFormField(
-                      controller: _passwordController,
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10.0),
-                        ),
-                      ),
-                      obscureText: true,
-                    ),
-                    SizedBox(height: 24.0),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _checkLogin,
-                        child: Text('Login'),
-                        style: ElevatedButton.styleFrom(
-                          padding: EdgeInsets.symmetric(vertical: 16.0),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10.0),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Form(
+                        key: _formKey,
+                        child: AutofillGroup(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: <Widget>[
+                              Icon(Icons.storefront,
+                                  size: 56, color: Colors.red[700]),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Welcome Back',
+                                style: TextStyle(
+                                  fontSize: 24.0,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 24.0),
+                              TextFormField(
+                                controller: _emailController,
+                                keyboardType: TextInputType.emailAddress,
+                                textInputAction: TextInputAction.next,
+                                autofillHints: const [AutofillHints.email],
+                                decoration: const InputDecoration(
+                                  labelText: 'Email',
+                                  prefixIcon: Icon(Icons.email_outlined),
+                                ),
+                                validator: validateEmail,
+                              ),
+                              const SizedBox(height: 16.0),
+                              TextFormField(
+                                controller: _passwordController,
+                                obscureText: !_showPassword,
+                                textInputAction: TextInputAction.done,
+                                autofillHints: const [AutofillHints.password],
+                                onFieldSubmitted: (_) => _checkLogin(),
+                                decoration: InputDecoration(
+                                  labelText: 'Password',
+                                  prefixIcon: const Icon(Icons.lock_outline),
+                                  suffixIcon: IconButton(
+                                    tooltip: _showPassword
+                                        ? 'Hide password'
+                                        : 'Show password',
+                                    icon: Icon(_showPassword
+                                        ? Icons.visibility_off
+                                        : Icons.visibility),
+                                    onPressed: () => setState(
+                                        () => _showPassword = !_showPassword),
+                                  ),
+                                ),
+                                validator: (v) => validateRequired(v, 'password'),
+                              ),
+                              const SizedBox(height: 24.0),
+                              SizedBox(
+                                width: double.infinity,
+                                height: 50,
+                                child: FilledButton(
+                                  onPressed: _loading ? null : _checkLogin,
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.red[700],
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10.0),
+                                    ),
+                                  ),
+                                  child: _loading
+                                      ? const SizedBox(
+                                          width: 22,
+                                          height: 22,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2.5,
+                                              color: Colors.white),
+                                        )
+                                      : const Text('Login',
+                                          style: TextStyle(fontSize: 16)),
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  const Text("Don't have an account?"),
+                                  TextButton(
+                                    onPressed: _loading ? null : _register,
+                                    child: const Text('Register'),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
                       ),
-                    ),SizedBox(height: 10,),
-                    Row(
-                      children: [
-                        Text(
-                          'Dont have an account ?',
-                          style: TextStyle(),
-                        ),
-                        SizedBox(
-                          width: 20,
-                        ),
-                        ElevatedButton(
-                            onPressed: _register, child: Text("Register"))
-                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                tooltip: 'Server address',
+                icon: const Icon(Icons.settings_ethernet),
+                onPressed: _editServer,
+              ),
+            ),
+          ],
         ),
       ),
     );
