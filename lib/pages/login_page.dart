@@ -72,34 +72,22 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> _editServer() async {
-    final ip = TextEditingController(text: ipAddress);
-    final portCtl = TextEditingController(text: port);
+    final url = TextEditingController(text: serverUrl);
     final saved = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Server address'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: ip,
-              decoration: const InputDecoration(labelText: 'IP address'),
-              keyboardType: TextInputType.url,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: portCtl,
-              decoration: const InputDecoration(labelText: 'Port'),
-              keyboardType: TextInputType.number,
-            ),
-          ],
+        content: TextField(
+          controller: url,
+          decoration: const InputDecoration(
+            labelText: 'Server URL',
+            hintText: 'https://example.com or 192.168.1.5:8080',
+          ),
+          keyboardType: TextInputType.url,
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              ip.text = defaultIpAddress;
-              portCtl.text = defaultPort;
-            },
+            onPressed: () => url.text = defaultServerUrl,
             child: const Text('Reset'),
           ),
           TextButton(
@@ -113,10 +101,9 @@ class _LoginPageState extends State<LoginPage> {
         ],
       ),
     );
-    if (saved == true && ip.text.trim().isNotEmpty) {
-      await saveServerAddress(ip.text,
-          portCtl.text.trim().isEmpty ? defaultPort : portCtl.text);
-      if (mounted) showMessage(context, 'Server set to $ipAddress:$port');
+    if (saved == true && url.text.trim().isNotEmpty) {
+      await saveServerAddress(url.text);
+      if (mounted) showMessage(context, 'Server set to $serverUrl');
     }
   }
 

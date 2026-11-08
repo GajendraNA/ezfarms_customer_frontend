@@ -1,36 +1,51 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-const String defaultIpAddress = '172.24.239.38';
-const String defaultPort = '8080';
+// Default backend address. Set it when building the app, for example:
+//   flutter build apk --dart-define=API_BASE_URL=https://ez-farms.onrender.com
+//   flutter build apk --dart-define=API_BASE_URL=http://203.0.113.25:8080
+// Without it, the app uses the local development server below.
+const String defaultServerUrl = String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'http://172.24.239.38:8080',
+);
 
-const _ipKey = 'serverIp';
-const _portKey = 'serverPort';
+const _urlKey = 'serverUrl';
 
-// The server address can be changed from the login screen, so it is not
-// hard-coded: handy when the backend machine's IP changes between networks.
-String ipAddress = defaultIpAddress;
-String port = defaultPort;
+// The server address can also be changed from the login screen, which is
+// handy when testing against a machine whose IP changes between networks.
+String serverUrl = normalizeServerUrl(defaultServerUrl);
+
+/// Accepts "1.2.3.4:8080", "http://1.2.3.4:8080" or "https://my-host.com/"
+/// and returns it with a scheme and without a trailing slash.
+String normalizeServerUrl(String input) {
+  var url = input.trim();
+  if (url.isEmpty) url = defaultServerUrl;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'http://$url';
+  }
+  while (url.endsWith('/')) {
+    url = url.substring(0, url.length - 1);
+  }
+  return url;
+}
 
 Future<void> loadServerAddress() async {
   try {
     final prefs = await SharedPreferences.getInstance();
-    ipAddress = prefs.getString(_ipKey) ?? defaultIpAddress;
-    port = prefs.getString(_portKey) ?? defaultPort;
+    serverUrl = normalizeServerUrl(prefs.getString(_urlKey) ?? defaultServerUrl);
   } catch (_) {
-    // Keep the defaults if preferences can't be read.
+    // Keep the default if preferences can't be read.
   }
 }
 
-Future<void> saveServerAddress(String ip, String newPort) async {
-  ipAddress = ip.trim();
-  port = newPort.trim();
+Future<void> saveServerAddress(String url) async {
+  serverUrl = normalizeServerUrl(url);
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_ipKey, ipAddress);
-  await prefs.setString(_portKey, port);
+  await prefs.setString(_urlKey, serverUrl);
 }
 
 String apiUrl(String endpoint) {
-  return 'http://$ipAddress:$port/api/$endpoint';
+  return '$serverUrl/api/$endpoint';
 }
 
 String get getAllOrdersUrl => apiUrl('orders');
@@ -47,5 +62,5 @@ String buyerOrdersUrl(int buyerId) => apiUrl('bOrders/$buyerId');
 String buyerPaymentsUrl(int buyerId) => apiUrl('bPayment/$buyerId');
 
 String getImageUrl(String? imagePath) {
-  return 'http://$ipAddress:$port/${imagePath ?? ''}';
+  return '$serverUrl/${imagePath ?? ''}';
 }
