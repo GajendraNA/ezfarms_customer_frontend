@@ -36,7 +36,7 @@ class MyApp extends StatelessWidget {
         ),
       ),
       debugShowCheckedModeBanner: false,
-      title: 'Customer',
+      title: 'EZ Farms Customer',
       home: const AuthCheck(),
     );
   }

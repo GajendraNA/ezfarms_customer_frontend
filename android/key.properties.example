@@ -1,0 +1,4 @@
+storePassword=<keystore password>
+keyPassword=<key password>
+keyAlias=ezfarms
+storeFile=<absolute path to ezfarms-release.jks>
