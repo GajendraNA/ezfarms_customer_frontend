@@ -1,12 +1,14 @@
 import 'package:customer/util/bottom_navigation_bar_page.dart';
 import 'package:customer/pages/login_page.dart';
 import 'package:customer/util/ipfile.dart';
+import 'package:customer/util/server_wakeup.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await loadServerAddress();
+  wakeUpServer();
   runApp(const MyApp());
 }
 
@@ -16,6 +18,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: scaffoldMessengerKey,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.red),
         scaffoldBackgroundColor: Colors.red[50],
