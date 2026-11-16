@@ -3,9 +3,10 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'package:customer/util/server_wakeup.dart';
+
 typedef Json = Map<String, dynamic>;
 
-const _timeout = Duration(seconds: 15);
 const _jsonHeaders = {'Content-Type': 'application/json; charset=UTF-8'};
 
 /// An error with a message that is safe to show to the user.
@@ -19,7 +20,7 @@ class ApiException implements Exception {
 
 Future<http.Response> _send(Future<http.Response> request) async {
   try {
-    return await request.timeout(_timeout);
+    return await request.waitForServer();
   } on TimeoutException {
     throw ApiException('The server took too long to respond.');
   } catch (_) {
