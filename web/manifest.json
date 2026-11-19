@@ -1,11 +1,11 @@
 {
-    "name": "customer",
-    "short_name": "customer",
+    "name": "EZ Farms Customer",
+    "short_name": "EZ Customer",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#C12420",
+    "theme_color": "#C12420",
+    "description": "EZ Farms for buyers: order fresh produce directly from farmers.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
